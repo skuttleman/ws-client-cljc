@@ -1,4 +1,4 @@
-(ns ws-client-cljc.client
+(ns com.ben-allred.ws-client-cljc.client
   #?(:clj
      (:require
        [gniazdo.core :as gn])))
