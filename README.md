@@ -6,12 +6,41 @@ A Clojure library designed to wrap a web socket connection in a core.async chann
 
 ```clojure
 (require '[clojure.core.async :as async])
-(require '[ws-client-cljc.core :as ws])
+(require '[com.ben-allred.ws-client-cljc.core :as ws])
 
-(def ch (ws/connect "ws://example.com/ws"))
+(def ch (ws/connect! "ws://example.com/ws"))
 (async/>!! ch "Hello")
 (println (async/<!! ch))
 (async/close! ch)
+```
+
+Works with transducers.
+
+```clojure
+(require '[clojure.core.async :as async])
+(require '[com.ben-allred.ws-client-cljc.core :as ws])
+
+(def ch (ws/connect! "ws://example.com/ws" {:in-buf-or-n 10   ;; Per the clojure.core.async spec:
+                                            :out-buf-or-n 100 ;; "If a transducer is supplied a buffer must be specified."
+                                            :in-xform (comp (map clojure.edn/read-string)
+                                                            (remove (comp #{:ping} :type)))
+                                            :out-xform (map pr-str)
+                                            :subprotocols ["application/edn"]}))
+(async/>!! ch {:message "hello"})
+(println (async/<!! ch))
+(async/close! ch)
+```
+
+For a client that will continuosly re-attempt to establish and keep a connection open:
+
+```clojure
+(require '[clojure.core.async :as async])
+(require '[com.ben-allred.ws-client-cljc.core :as ws])
+
+(def ch (ws/keep-alive! "ws://example.com/ws"))
+(async/>!! ch "Hello")
+(println (async/<!! ch))
+(async/close! ch) ;; Closing the channel manually discontinues keeping the connection alive.
 ```
 
 ## License

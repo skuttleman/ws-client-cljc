@@ -16,13 +16,13 @@
                           (client/send! ws msg)
                           (recur)))))
 
-(defn ^:private keep-alive* [uri opts reconnect?]
+(defn ^:private keep-alive* [uri opts reconnect? timeout]
   (async/go-loop []
     (if-let [ws (try (client/connect! uri opts)
                      (catch #?(:clj Throwable :cljs :default) _
                        nil))]
       ws
-      (do (async/<! (async/timeout RECONNECT_TIMEOUT))
+      (do (async/<! (async/timeout timeout))
           (when @reconnect?
             (recur))))))
 
@@ -89,17 +89,18 @@
 
   Example:
   (def ws (ws/keep-alive! \"ws://example.com/ws\"
-                          {:in-buf-or-n 100
-                           :out-buf-or-n 10
+                          {:in-buf-or-n 10
+                           :out-buf-or-n 100
                            :in-xform (map clojure.edn/read-string)
                            :out-xform (map pr-str)
                            :subprotocols [\"protocol-1\" \"protocol-2\"]}))
   (async/>!! ws {:message \"PING\"})
   (println (async/<!! ws))
-  (async/close! ws)"
+  (async/close! ws) ;; Discontinues \"keep alive\" behavior."
   ([uri]
    (keep-alive! uri nil))
-  ([uri {:keys [in-buf-or-n out-buf-or-n in-xform out-xform subprotocols] :as opts}]
+  ([uri {:keys [in-buf-or-n out-buf-or-n in-xform out-xform subprotocols reconnect-ms] :as opts
+         :or {reconnect-ms RECONNECT_TIMEOUT}}]
    (let [in (async/chan in-buf-or-n in-xform)
          out (async/chan out-buf-or-n out-xform)
          reconnect? (volatile! true)
@@ -112,12 +113,12 @@
                                               (async/close! ch))
                                             (if @reconnect?
                                               (async/go
-                                                (vreset! ws (async/<! (keep-alive* uri @connect-opts reconnect?))))
+                                                (vreset! ws (async/<! (keep-alive* uri @connect-opts reconnect? reconnect-ms))))
                                               (run! async/close! [in out])))
                             :on-receive   (fn [_ msg] (async/put! in msg))
                             :subprotocols subprotocols})
      (async/go
-       (vreset! ws (async/<! (keep-alive* uri @connect-opts reconnect?))))
+       (vreset! ws (async/<! (keep-alive* uri @connect-opts reconnect? reconnect-ms))))
      (reify
        async.protocols/ReadPort
        (take! [_ fn1-handler]
