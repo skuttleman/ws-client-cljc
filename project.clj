@@ -1,4 +1,4 @@
-(defproject com.ben-allred/ws-client-cljc "0.1.0-SNAPSHOT"
+(defproject com.ben-allred/ws-client-cljc "0.2.0"
   :description "A validation and conforming library for nested data structures"
   :url "https://github.com/skuttleman/formation"
   :license {:name "Eclipse Public License"

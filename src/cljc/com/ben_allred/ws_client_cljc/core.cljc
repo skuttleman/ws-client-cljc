@@ -51,9 +51,9 @@
    (let [in (async/chan in-buf-or-n in-xform)
          out (async/chan out-buf-or-n out-xform)
          ws (try (client/connect! uri
-                                  {:on-connect (partial on-connect* out)
-                                   :on-close   (fn [_ _] (async/close! in) (async/close! out))
-                                   :on-receive (fn [_ msg] (async/put! in msg))
+                                  {:on-connect   (partial on-connect* out)
+                                   :on-close     (fn [_ _] (async/close! in) (async/close! out))
+                                   :on-receive   (fn [_ msg] (async/put! in msg))
                                    :subprotocols subprotocols})
                  (catch #?(:clj Throwable :cljs :default) ex
                    (async/close! in)
@@ -100,42 +100,45 @@
   ([uri]
    (keep-alive! uri nil))
   ([uri {:keys [in-buf-or-n out-buf-or-n in-xform out-xform subprotocols reconnect-ms] :as opts
-         :or {reconnect-ms RECONNECT_TIMEOUT}}]
+         :or   {reconnect-ms RECONNECT_TIMEOUT}}]
    (let [in (async/chan in-buf-or-n in-xform)
          out (async/chan out-buf-or-n out-xform)
          reconnect? (volatile! true)
          loop (volatile! nil)
          ws (volatile! nil)
          connect-opts (volatile! nil)]
-     (vreset! connect-opts {:on-connect   (comp (partial vreset! loop) (partial on-connect* out))
-                            :on-close     (fn [_ _]
-                                            (when-let [ch @loop]
-                                              (async/close! ch))
-                                            (if @reconnect?
-                                              (async/go
-                                                (vreset! ws (async/<! (keep-alive* uri @connect-opts reconnect? reconnect-ms))))
-                                              (run! async/close! [in out])))
-                            :on-receive   (fn [_ msg] (async/put! in msg))
-                            :subprotocols subprotocols})
-     (async/go
-       (vreset! ws (async/<! (keep-alive* uri @connect-opts reconnect? reconnect-ms))))
-     (reify
-       async.protocols/ReadPort
-       (take! [_ fn1-handler]
-         (async.protocols/take! in fn1-handler))
+     (letfn [(with-ws [opts]
+               (async/go
+                 (vreset! ws (async/<! (keep-alive* uri opts reconnect? reconnect-ms))))
+               opts)]
+       (->> {:on-connect   (comp (partial vreset! loop) (partial on-connect* out))
+             :on-close     (fn [_ _]
+                             (when-let [ch @loop]
+                               (async/close! ch))
+                             (if @reconnect?
+                               (with-ws @connect-opts)
+                               (run! async/close! [in out])))
+             :on-receive   (fn [_ msg] (async/put! in msg))
+             :subprotocols subprotocols}
+            with-ws
+            (vreset! connect-opts))
+       (reify
+         async.protocols/ReadPort
+         (take! [_ fn1-handler]
+           (async.protocols/take! in fn1-handler))
 
-       async.protocols/WritePort
-       (put! [_ val fn1-handler]
-         (async.protocols/put! out val fn1-handler))
+         async.protocols/WritePort
+         (put! [_ val fn1-handler]
+           (async.protocols/put! out val fn1-handler))
 
-       async.protocols/Channel
-       (closed? [_]
-         (and (some? @ws)
-              (or (and (not (client/connecting? @ws))
-                       (not (client/open? @ws)))
-                  (async.protocols/closed? in)
-                  (async.protocols/closed? out))))
-       (close! [_]
-         (vreset! reconnect? false)
-         (when-let [socket @ws]
-           (client/close! socket)))))))
+         async.protocols/Channel
+         (closed? [_]
+           (and (some? @ws)
+                (or (and (not (client/connecting? @ws))
+                         (not (client/open? @ws)))
+                    (async.protocols/closed? in)
+                    (async.protocols/closed? out))))
+         (close! [_]
+           (vreset! reconnect? false)
+           (when-let [socket @ws]
+             (client/close! socket))))))))
