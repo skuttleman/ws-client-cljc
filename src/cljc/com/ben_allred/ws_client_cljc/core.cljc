@@ -16,15 +16,17 @@
                           (client/send! ws msg)
                           (recur)))))
 
-(defn ^:private keep-alive* [uri opts reconnect? timeout]
-  (async/go-loop []
-    (if-let [ws (try (client/connect! uri opts)
-                     (catch #?(:clj Throwable :cljs :default) _
-                       nil))]
-      ws
-      (do (async/<! (async/timeout timeout))
-          (when @reconnect?
-            (recur))))))
+(defn ^:private keep-alive* [uri opts reconnect? timeout init-timeout]
+  (async/go
+    (async/<! init-timeout)
+    (loop []
+      (if-let [ws (try (client/connect! uri opts)
+                       (catch #?(:clj Throwable :cljs :default) _
+                         nil))]
+        ws
+        (do (async/<! (async/timeout timeout))
+            (when @reconnect?
+              (recur)))))))
 
 (defn connect!
   "Wraps the ws-client-cljs.client/IWebSocket with a core.async channel
@@ -107,20 +109,20 @@
          loop (volatile! nil)
          ws (volatile! nil)
          connect-opts (volatile! nil)]
-     (letfn [(with-ws [opts]
+     (letfn [(with-ws [init-timeout opts]
                (async/go
-                 (vreset! ws (async/<! (keep-alive* uri opts reconnect? reconnect-ms))))
+                 (vreset! ws (async/<! (keep-alive* uri opts reconnect? reconnect-ms init-timeout))))
                opts)]
        (->> {:on-connect   (comp (partial vreset! loop) (partial on-connect* out))
              :on-close     (fn [_ _]
                              (when-let [ch @loop]
                                (async/close! ch))
                              (if @reconnect?
-                               (with-ws @connect-opts)
+                               (with-ws reconnect-ms @connect-opts)
                                (run! async/close! [in out])))
              :on-receive   (fn [_ msg] (async/put! in msg))
              :subprotocols subprotocols}
-            with-ws
+            (with-ws 0)
             (vreset! connect-opts))
        (reify
          async.protocols/ReadPort
