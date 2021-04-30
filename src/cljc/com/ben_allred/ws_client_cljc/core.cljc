@@ -18,7 +18,7 @@
 
 (defn ^:private keep-alive* [uri opts reconnect? timeout init-timeout]
   (async/go
-    (async/<! init-timeout)
+    (async/<! (async/timeout init-timeout))
     (loop []
       (if-let [ws (try (client/connect! uri opts)
                        (catch #?(:clj Throwable :cljs :default) _
