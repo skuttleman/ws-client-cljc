@@ -49,35 +49,41 @@
   (async/close! ws)"
   ([uri]
    (connect! uri nil))
-  ([uri {:keys [in-buf-or-n out-buf-or-n in-xform out-xform subprotocols] :as opts}]
+  ([uri {:keys [in-buf-or-n out-buf-or-n in-xform out-xform subprotocols on-connect]
+         :or   {on-connect (constantly nil)}}]
    (let [in (async/chan in-buf-or-n in-xform)
          out (async/chan out-buf-or-n out-xform)
+         client (volatile! nil)
          ws (try (client/connect! uri
-                                  {:on-connect   (partial on-connect* out)
-                                   :on-close     (fn [_ _] (async/close! in) (async/close! out))
-                                   :on-receive   (fn [_ msg] (async/put! in msg))
-                                   :subprotocols subprotocols})
-                 (catch #?(:clj Throwable :cljs :default) ex
+                                  {:on-connect (fn [ws]
+                                                 (on-connect* out ws)
+                                                 (on-connect @client))
+                                   (partial on-connect* out on-connect)
+                                               :on-close (fn [_ _] (async/close! in) (async/close! out))
+                                               :on-receive (fn [_ msg] (async/put! in msg))
+                                               :subprotocols subprotocols})
+                 (catch #?(:clj Throwable :default :default) ex
                    (async/close! in)
                    (async/close! out)
                    (throw ex)))]
-     (reify
-       async.protocols/ReadPort
-       (take! [_ fn1-handler]
-         (async.protocols/take! in fn1-handler))
+     (vreset! client (reify
+                       async.protocols/ReadPort
+                       (take! [_ fn1-handler]
+                         (async.protocols/take! in fn1-handler))
 
-       async.protocols/WritePort
-       (put! [_ val fn1-handler]
-         (async.protocols/put! out val fn1-handler))
+                       async.protocols/WritePort
+                       (put! [_ val fn1-handler]
+                         (async.protocols/put! out val fn1-handler))
 
-       async.protocols/Channel
-       (closed? [_]
-         (or (and (not (client/connecting? ws))
-                  (not (client/open? ws)))
-             (async.protocols/closed? in)
-             (async.protocols/closed? out)))
-       (close! [_]
-         (client/close! ws))))))
+                       async.protocols/Channel
+                       (closed? [_]
+                         (or (and (not (client/connecting? ws))
+                                  (not (client/open? ws)))
+                             (async.protocols/closed? in)
+                             (async.protocols/closed? out)))
+                       (close! [_]
+                         (client/close! ws))))
+     @client)))
 
 (defn keep-alive!
   "Wraps the ws-client-cljs.client/IWebSocket with a core.async channel and continuously tries to keep a connection
@@ -101,8 +107,8 @@
   (async/close! ws) ;; Discontinues \"keep alive\" behavior."
   ([uri]
    (keep-alive! uri nil))
-  ([uri {:keys [in-buf-or-n out-buf-or-n in-xform out-xform subprotocols reconnect-ms] :as opts
-         :or   {reconnect-ms RECONNECT_TIMEOUT}}]
+  ([uri {:keys [in-buf-or-n out-buf-or-n in-xform out-xform subprotocols reconnect-ms on-connect]
+         :or   {reconnect-ms RECONNECT_TIMEOUT on-connect (constantly nil)}}]
    (let [in (async/chan in-buf-or-n in-xform)
          out (async/chan out-buf-or-n out-xform)
          reconnect? (volatile! true)
@@ -113,34 +119,37 @@
                (async/go
                  (vreset! ws (async/<! (keep-alive* uri opts reconnect? reconnect-ms init-timeout))))
                opts)]
-       (->> {:on-connect   (comp (partial vreset! loop) (partial on-connect* out))
-             :on-close     (fn [_ _]
-                             (when-let [ch @loop]
-                               (async/close! ch))
-                             (if @reconnect?
-                               (with-ws reconnect-ms @connect-opts)
-                               (run! async/close! [in out])))
-             :on-receive   (fn [_ msg] (async/put! in msg))
-             :subprotocols subprotocols}
-            (with-ws 0)
-            (vreset! connect-opts))
-       (reify
-         async.protocols/ReadPort
-         (take! [_ fn1-handler]
-           (async.protocols/take! in fn1-handler))
+       (let [client (reify
+                      async.protocols/ReadPort
+                      (take! [_ fn1-handler]
+                        (async.protocols/take! in fn1-handler))
 
-         async.protocols/WritePort
-         (put! [_ val fn1-handler]
-           (async.protocols/put! out val fn1-handler))
+                      async.protocols/WritePort
+                      (put! [_ val fn1-handler]
+                        (async.protocols/put! out val fn1-handler))
 
-         async.protocols/Channel
-         (closed? [_]
-           (and (some? @ws)
-                (or (and (not (client/connecting? @ws))
-                         (not (client/open? @ws)))
-                    (async.protocols/closed? in)
-                    (async.protocols/closed? out))))
-         (close! [_]
-           (vreset! reconnect? false)
-           (when-let [socket @ws]
-             (client/close! socket))))))))
+                      async.protocols/Channel
+                      (closed? [_]
+                        (and (some? @ws)
+                             (or (and (not (client/connecting? @ws))
+                                      (not (client/open? @ws)))
+                                 (async.protocols/closed? in)
+                                 (async.protocols/closed? out))))
+                      (close! [_]
+                        (vreset! reconnect? false)
+                        (when-let [socket @ws]
+                          (client/close! socket))))]
+         (->> {:on-connect   (fn [ws]
+                               (vreset! loop (on-connect* out ws))
+                               (on-connect client))
+               :on-close     (fn [_ _]
+                               (when-let [ch @loop]
+                                 (async/close! ch))
+                               (if @reconnect?
+                                 (with-ws reconnect-ms @connect-opts)
+                                 (run! async/close! [in out])))
+               :on-receive   (fn [_ msg] (async/put! in msg))
+               :subprotocols subprotocols}
+              (with-ws 0)
+              (vreset! connect-opts))
+         client)))))

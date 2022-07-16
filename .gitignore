@@ -6,3 +6,4 @@
 *.class
 /.lein-*
 /.nrepl-port
+node_modules/
