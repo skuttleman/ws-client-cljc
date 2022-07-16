@@ -55,13 +55,12 @@
          out (async/chan out-buf-or-n out-xform)
          client (volatile! nil)
          ws (try (client/connect! uri
-                                  {:on-connect (fn [ws]
-                                                 (on-connect* out ws)
-                                                 (on-connect @client))
-                                   (partial on-connect* out on-connect)
-                                               :on-close (fn [_ _] (async/close! in) (async/close! out))
-                                               :on-receive (fn [_ msg] (async/put! in msg))
-                                               :subprotocols subprotocols})
+                                  {:on-connect   (fn [ws]
+                                                   (on-connect* out ws)
+                                                   (on-connect @client))
+                                   :on-close     (fn [_ _] (async/close! in) (async/close! out))
+                                   :on-receive   (fn [_ msg] (async/put! in msg))
+                                   :subprotocols subprotocols})
                  (catch #?(:clj Throwable :default :default) ex
                    (async/close! in)
                    (async/close! out)
